@@ -1,0 +1,150 @@
+# ----------------------------
+# Project metadata
+# ----------------------------
+project:
+  name: DGE_pipeline
+  organism: human
+
+# ----------------------------
+# Input data
+# ----------------------------
+input:
+  base_dir: 
+  data_dir: data
+
+# ----------------------------
+# Ingest / metadata mapping
+# ----------------------------
+ingest:
+  default:
+    sample_id_col: sample_id
+    donor_id_col: donor_id
+    condition_col: condition
+    batch_col: plate
+    raw_cell_id_cols:
+      parse_splitpipe: bc_wells
+      standard_matrix: cell
+      h5ad: cell_id
+      rds: rownames
+      zarr: cell_id
+
+  samples:
+    Example_sample:
+        sample_id_col: orig.ident
+        donor_id_col: donor
+        condition_col: condition
+        batch_col: batch
+        raw_cell_id_cols:
+          rds: rownames
+
+
+# ----------------------------
+# Cell set definition
+# ----------------------------
+cell_sets:
+  high_UMI:
+    where: "n_umis > 1000"
+
+  high_feature:
+    where: "nFeature_RNA > 500"
+
+  good_QC:
+    algebra: 
+      "high_UMI AND low_mt AND high_feature"
+
+
+# ----------------------------
+# Pseudobulk
+# ----------------------------
+
+pseudobulk:
+
+  aggregation:
+    unit_col: sample_id        # column used as pseudobulk unit
+    donor_col: donor_id
+    condition_col: condition
+    batch_col: batch
+
+  filtering:
+
+    units:
+      min_cells_per_unit: 50
+      min_total_counts_per_unit: 0
+
+    genes:
+      use_group_for_filter: true   # pass condition to filterByExpr
+
+  downsampling:
+    enabled: false
+    max_cells_per_unit: 2000
+    seed: 1
+
+# ----------------------------
+# Differential expression
+# ----------------------------
+
+dge:
+  default_engine: "edgeR_qlf"
+  engines:
+    edgeR_qlf:
+      description: "edgeR quasi-likelihood GLM per cell set"
+      required_packages: ["edgeR"]
+      outputs:
+        - result_table
+        - model_json
+        - diagnostics
+
+  design:
+    formula: "~ donor_id + condition"
+    reference_levels:
+      condition: "PEQ"
+    covariates_optional: ["sex", "age"]
+
+  tests:
+
+    # Global condition effect (multi-df)
+    - name: condition_global
+      type: coef_set
+      coefficients: ["conditionLPS", "conditionDEX", "conditionHPX", "conditionIFN", "conditionUTR"]
+
+    # Simple pairwise
+    - name: LPS_vs_control
+      type: contrast
+      contrast: "conditionLPS"
+
+    - name: DEX_vs_control
+      type: contrast
+      contrast: "conditionDEX"
+
+    - name: HPX_vs_control
+      type: contrast
+      contrast: "conditionHPX"
+      cell_sets: ["good_QC"]
+
+    - name: IFN_vs_control
+      type: contrast
+      contrast: "conditionIFN"
+      cell_sets: ["high_feature"]
+
+  constraints:
+    min_units_per_level: 2
+    min_total_units: 4
+    multiple_testing: BH
+
+  result_table_schema:
+    required_columns:
+      - gene_id
+      - logFC
+      - PValue
+      - FDR
+    recommended_columns:
+      - gene_symbol
+      - AveExpr_or_logCPM
+      - stat
+      - mean_expr_group1
+      - mean_expr_group2
+      - prop_units_expr_group1
+      - prop_units_expr_group2
+      - n_units_total
+      - n_units_group1
+      - n_units_group2

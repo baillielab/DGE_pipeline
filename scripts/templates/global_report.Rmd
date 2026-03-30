@@ -1,0 +1,135 @@
+---
+title: "Global DGE Summary"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+params:
+  de: NULL
+  results_index: NULL
+---
+
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(knitr)
+theme_set(theme_minimal(base_size = 13))
+
+de <- params$de
+results_index <- params$results_index
+```
+
+# Global Differential Expression Report
+
+This report summarizes differential expression results across all cell sets and contrasts.
+
+---
+
+# 1 Pipeline Run Summary
+
+```{r pipeline_summary, echo=FALSE, results='asis'}
+if (!is.null(results_index) && nrow(results_index) > 0) {
+  print(kable(results_index,
+        caption = "Pipeline results index"))
+        } else {
+  cat("No results index available.\n")
+}
+```
+
+---
+
+# 2 DE Genes per Cell Set and Contrast
+```{r DE_genes, echo=FALSE, results='asis'}
+if (!is.null(de) && nrow(de) > 0) {
+  summary_counts <- de %>%
+    group_by(cell_set, contrast) %>%
+    summarise(
+      significant = sum(FDR < 0.05, na.rm = TRUE),
+      min_FDR = formatC(min(FDR, na.rm = TRUE), format="e", digits=2),
+      .groups = "drop"
+    )
+  print(kable(summary_counts,
+        caption = "Significant DE genes per cell set and contrast"))
+        }
+```
+
+---
+
+# 3 Significant Genes by Contrast
+```{r sig_genes, echo=FALSE}
+if (!is.null(de) && nrow(de) > 0) {
+  counts <- de %>%
+    group_by(cell_set, contrast) %>%
+    summarise(significant = sum(FDR < 0.05), .groups="drop")
+  p<-ggplot(counts,
+         aes(reorder(paste(cell_set, contrast), significant),
+             significant)) +
+    geom_col(fill="firebrick") +
+    coord_flip() +
+    labs(
+      title = "Significant DE genes per analysis",
+      x = "Cell set / contrast",
+      y = "Genes (FDR < 0.05)"
+    )
+  
+  print(p)
+}
+```
+
+---
+
+# 4 Distribution of Effect Sizes
+```{r distribution, echo=FALSE}
+if (!is.null(de) && nrow(de) > 0) {
+  p<-ggplot(de, aes(logFC)) +
+    geom_histogram(bins=50, fill="steelblue") +
+    facet_wrap(~contrast, scales="free_y") +
+    labs(
+      title="Distribution of log fold changes",
+      x="logFC",
+      y="Gene count"
+    )
+  
+  print(p)
+}
+```
+
+# 5 Overlap of DE Genes Between Contrasts
+```{r overlap, echo=FALSE, results='asis'}
+if (!is.null(de) && nrow(de) > 0) {
+  sig <- de %>% filter(FDR < 0.05)
+  overlap <- sig %>%
+    group_by(gene_id) %>%
+    summarise(
+      contrasts = paste(unique(contrast), collapse=", "),
+      n_contrasts = n_distinct(contrast),
+      .groups="drop"
+    ) %>%
+    arrange(desc(n_contrasts))
+  top_overlap <- head(overlap, 20)
+  print(kable(top_overlap,
+        caption="Genes appearing in multiple contrasts"))
+  }
+```
+
+---
+
+# 6 Most Significant Genes Globally
+
+```{r global_sig, echo=FALSE, results='asis'}
+if (!is.null(de) && nrow(de) > 0) {
+  top <- de %>%
+    arrange(FDR) %>%
+    head(20) %>%
+    mutate(
+      logFC = round(logFC, 3),
+      FDR = formatC(FDR, format="e", digits=2)
+    ) %>%
+    select(cell_set, contrast, gene_id, logFC, FDR)
+  print(kable(top,
+        caption="Top DE genes across all analyses"))
+  }
+```

@@ -1,0 +1,318 @@
+---
+title: "Differential Expression Report"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+params:
+  cellset: NULL
+  summary: NULL
+  qc: NULL
+  de_results: NULL
+---
+
+---
+
+```{r setup, echo=FALSE}
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(ggrepel)
+library(pheatmap)
+
+theme_set(theme_minimal(base_size = 13))
+
+cellset <- params$cellset %||% "Unknown"
+summary_df <- params$summary
+qc_df <- params$qc
+de_results <- params$de_results
+
+if (is.null(summary_df)) summary_df <- data.frame()
+if (is.null(qc_df)) qc_df <- data.frame()
+if (is.null(de_results)) de_results <- list()
+```
+
+# Cell Set: `r cellset`
+
+---
+
+# 1 Overview Statistics
+
+```{r overview_table, echo=FALSE, results='asis'}
+if (!is.null(summary_df) && nrow(summary_df) > 0) {
+
+  print(knitr::kable(
+    summary_df,
+    caption = "Cells, UMIs and Donor Counts per Condition",
+    align = "lrr"))
+}
+```
+
+### Cells per condition
+
+```{r cells_plot, echo=FALSE}
+if (!is.null(summary_df) &&
+    all(c("condition","n_cells") %in% colnames(summary_df))) {
+
+  p <- ggplot(summary_df,
+              aes(condition, n_cells)) +
+    geom_col(fill="steelblue") +
+    labs(title="Total Cells per Condition",
+         y="Cells") +
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+
+  print(p)
+}
+```
+
+### UMIs per condition
+
+```{r umis_plot, echo=FALSE}
+if (!is.null(summary_df) &&
+    all(c("condition","n_umis") %in% colnames(summary_df))) {
+
+  p <- ggplot(summary_df,
+              aes(condition, n_umis)) +
+    geom_col(fill="darkorange") +
+    labs(title="Total UMIs per Condition",
+         y="UMIs") +
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+
+  print(p)
+}
+```
+
+### Donor balance
+
+```{r donors_plot, echo=FALSE}
+if (!is.null(summary_df) &&
+    all(c("condition","n_donors") %in% colnames(summary_df))) {
+
+  p <- ggplot(summary_df,
+              aes(condition, n_donors)) +
+    geom_col(fill="forestgreen") +
+    labs(title="Donor representation per condition",
+         y="Donors") +
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+
+  print(p)
+}
+```
+
+---
+
+# 2 QC Metrics
+
+### Library size distribution
+
+```{r qc_library, echo=FALSE}
+if (!is.null(qc_df) &&
+    all(c("condition","library_size") %in% colnames(qc_df))) {
+
+  p <- ggplot(qc_df,
+              aes(condition, library_size)) +
+    geom_boxplot(outlier.alpha=0.3) +
+    labs(title="Library Size Distribution",
+         y="Library size") +
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+
+  print(p)
+}
+```
+
+### Cells per pseudobulk sample
+
+```{r qc_cells, echo=FALSE}
+if (!is.null(qc_df) &&
+    all(c("condition","n_cells") %in% colnames(qc_df))) {
+
+  p <- ggplot(qc_df,
+              aes(condition, n_cells)) +
+    geom_boxplot(outlier.alpha=0.3) +
+    labs(title="Cells per Sample",
+         y="Cells") +
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+
+  print(p)
+}
+```
+
+---
+
+# 3 PCA of pseudobulk QC metrics
+
+```{r pca_qc, echo=FALSE}
+if (!is.null(qc_df) &&
+    all(c("sample_id","condition","library_size","n_cells") %in% colnames(qc_df))) {
+
+  qc_pca <- qc_df %>%
+    select(sample_id, condition, library_size, n_cells) %>%
+    na.omit()
+
+  if (nrow(qc_pca) > 2) {
+
+    mat <- scale(qc_pca[,c("library_size","n_cells")])
+    pca <- prcomp(mat)
+
+    pca_df <- data.frame(
+      PC1 = pca$x[,1],
+      PC2 = pca$x[,2],
+      condition = qc_pca$condition
+    )
+
+    p <- ggplot(pca_df,
+                aes(PC1, PC2, colour=condition)) +
+      geom_point(size=3) +
+      labs(title="PCA of pseudobulk QC metrics")
+
+    print(p)
+  }
+}
+```
+
+---
+
+# 4 Differential Expression Summary
+
+```{r de_summary, echo=FALSE, results='asis'}
+if (!is.null(de_results) && length(de_results) > 0) {
+
+  sig_counts <- lapply(names(de_results), function(nm){
+
+    res <- de_results[[nm]]
+
+    if (!is.null(res) && "FDR" %in% colnames(res)) {
+
+      data.frame(
+        contrast = nm,
+        significant = sum(res$FDR < 0.05, na.rm=TRUE)
+      )
+
+    }
+
+  }) %>% bind_rows()
+
+  if (!is.null(sig_counts) && nrow(sig_counts) > 0) {
+
+    print(
+      kable(sig_counts,
+            caption="Significant genes per contrast (FDR < 0.05)")
+    )
+
+    p <- ggplot(sig_counts,
+                aes(reorder(contrast, significant), significant)) +
+      geom_col(fill="firebrick") +
+      coord_flip() +
+      labs(title="Significant DE genes",
+           x="Contrast",
+           y="Genes")
+
+    print(p)
+
+  }
+
+}
+```
+
+---
+
+# 5 Top Gene Heatmap
+
+```{r heatmap, echo=FALSE}
+if (!is.null(de_results) && length(de_results) > 1) {
+
+  top_genes <- lapply(de_results, function(res){
+
+    if (!is.null(res) && "FDR" %in% colnames(res)) {
+      res %>% arrange(FDR) %>% head(20) %>% pull(gene_id)
+    }
+
+  })
+
+  top_genes <- unique(unlist(top_genes))
+
+  if (length(top_genes) > 2) {
+
+    mat <- sapply(de_results, function(res){
+
+      vals <- res$logFC[match(top_genes, res$gene_id)]
+      vals[is.na(vals)] <- 0
+      vals
+
+    })
+
+    rownames(mat) <- top_genes
+
+    pheatmap(mat,
+             cluster_rows=TRUE,
+             cluster_cols=TRUE,
+             main="Top DE genes across contrasts")
+
+  }
+
+}
+```
+
+---
+
+# 6 Contrast Details
+
+```{r contrasts, echo=FALSE, results='asis'}
+if (!is.null(de_results) && length(de_results) > 0) {
+
+  for (nm in names(de_results)) {
+
+    cat("\n##", nm, "\n")
+
+    res <- de_results[[nm]]
+
+    if (!is.null(res) &&
+        nrow(res) > 0 &&
+        all(c("gene_id","logFC","FDR") %in% colnames(res))) {
+
+      res$gene <- res$gene_id
+      res$FDR[res$FDR == 0] <- 1e-300
+
+      top10 <- res %>% arrange(FDR) %>% head(10)
+
+      volcano <- ggplot(res,
+                        aes(logFC, -log10(FDR))) +
+        geom_point(aes(color = FDR < 0.05), alpha=0.6) +
+        scale_color_manual(values=c("grey70","firebrick")) +
+        geom_hline(yintercept=-log10(0.05),
+                   linetype="dashed",
+                   colour="red") +
+        ggrepel::geom_text_repel(
+          data=top10,
+          aes(label=gene),
+          max.overlaps=10
+        ) +
+        labs(title=paste("Volcano:", nm),
+             y="-log10(FDR)")
+
+      print(volcano)
+      
+      top <- top10 %>%
+        select(gene, logFC, FDR) %>%
+        mutate(
+          logFC = round(logFC, 3),
+          FDR = formatC(FDR, format = "e", digits = 2)
+          )
+      
+      print(knitr::kable(
+        top,
+        caption = "Top 10 Differentially Expressed Genes",
+        align = "lrr"))
+
+    } else {
+
+      cat("No valid DE results available\n")
+
+    }
+
+  }
+
+}
+```
+
